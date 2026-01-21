@@ -42,106 +42,11 @@ then
 	exit 1
 fi
 
-function generate_data() {
-	local f
-	local files
-	if ! grep -q EXPECTED_DATA "$cmakelist"
-	then
-		echo "[!] Warning: not EXPECTED_DATA entry found"
-		return
-	fi
-
-	local expected_data_line
-	if ! expected_data_line="$(grep '^set_glob.*EXPECTED_DATA' "$cmakelist")"
-	then
-		echo "[!] Warning: did not match EXPECTED_DATA line"
-		return
-	fi
-
-	if [ "$(echo "$expected_data_line" | wc -l)" -gt "1" ]
-	then
-		echo "[!] Warning: found multiple EXPECTED_DATA lines. Skipping data folder!"
-		echo "             lines found:"
-		echo ""
-		echo "$expected_data_line"
-		echo ""
-		return
-	fi
-
-	# expected_data_line is supposed to look like one of these:
-	#
-	# set_glob(DATA GLOB_RECURSE "png;map" data ${EXPECTED_DATA})
-	# set_glob(DATA GLOB_RECURSE "json;map;png;rules;ttc;ttf;txt;wv" datasrc ${EXPECTED_DATA})
-	# set_glob(DATA GLOB_RECURSE "cfg;frag;json;map;otf;png;rules;ttc;ttf;txt;vert;wv" data ${EXPECTED_DATA})
-	#
-	# which means we could also verify we search for the correct file extensions
-
-	local datasrc_path="$twpath/datasrc"
-	if printf "%s" "$expected_data_line" | grep -q " data "
-	then
-		# assume datasrc by default
-		# if we match " data " it is probably data
-		datasrc_path="$twpath/data"
-
-		if printf "%s" "$expected_data_line" | grep -q " datasrc "
-		then
-			echo "[!] Warning: can not determine data folder location"
-			echo "             found both 'data' and 'datasrc' in this line"
-			echo ""
-			echo "$expected_data_line"
-			echo ""
-			return
-		fi
-
-		echo "[*] use data/ dir instead of datasrc/"
-	fi
-
-	if [ ! -d "$datasrc_path" ]
-	then
-		echo "[-] Error: '$datasrc_path' path not found."
-		exit 1
-	fi
-
-	files=$(find "$datasrc_path" -type f \( \
-		-name "*.cfg" 	-o \
-		-name "*.frag" 	-o \
-		-name "*.json" 	-o \
-		-name "*.map" 	-o \
-		-name "*.otf" 	-o \
-		-name "*.pem" 	-o \
-		-name "*.png" 	-o \
-		-name "*.rules"	-o \
-		-name "*.txt"	-o \
-		-name "*.ttf" 	-o \
-		-name "*.ttc" 	-o \
-		-name "*.vert" 	-o \
-		-name "*.wv" \) -print0 | while IFS= read -r -d '' f
-	do
-		f="${f// /\\ }"
-		echo "  ${f/$datasrc_path\//}"
-	done | LC_ALL=C sort)
-
-	pad="########################################################################"
-	empty=$(sed '/set(EXPECTED_DATA/,/)/d' "$cmakelist" | \
-		tr '\n' '\f' | \
-		sed -e "s/# DATA\\f$pad/# DATA\\f$pad\\fXXX START\\fXXX END/" | \
-		tr '\f' '\n')
-	{
-		echo "$empty" | sed -n -e '/XXX START/,$!p'
-		echo ""
-		echo "set(EXPECTED_DATA"
-		echo "$files"
-		printf ")"
-		echo "$empty" | sed -n -e '1,/XXX END/!p'
-	} > "$cmakelist"
-}
-
 function get_files_recurse() {
 	local dir="$1"
 	local oneline="$2"
 	local indent="${3:-  }"
 	local pipe=cat
-	dir="$twpath/$dir"
 	if [ "$oneline" == "1" ]
 	then
 		pipe="tr '\n' ' '"
@@ -166,7 +71,6 @@ function get_files() {
 	local oneline="$2"
 	local indent="${3:-  }"
 	local pipe=cat
-	dir="$twpath/$dir"
 	if [ "$oneline" == "1" ]
 	then
 		pipe="tr '\n' ' '"
@@ -250,6 +154,8 @@ function generate_src() {
 function generate_sources() {
 	local set_src
 	local recurse
+	local dir
+	local full_dir
 	while IFS= read -r set_src
 	do
 		if \
@@ -274,9 +180,19 @@ function generate_sources() {
 				continue
 			fi
 		fi
+
+		dir="$(echo "$set_src" | awk '{ print $3 }')"
+
+		if [[ "$dir" == /* ]] || [[ "$dir" == "$twpath"* ]]
+		then
+		        full_dir="$dir"
+		else
+		        full_dir="$twpath/$dir"
+		fi
+
 		if [[ "$set_src" =~ \) ]]
 		then
-			generate_src_oneline "$set_src" "$(echo "$set_src" | awk '{ print $3 }')"
+			generate_src_oneline "$set_src" "$full_dir"
 		else
 			if echo "$set_src" | grep -q GLOB_RECURSE
 			then
@@ -284,13 +200,11 @@ function generate_sources() {
 			else
 				recurse=0
 			fi
-			generate_src "$set_src" "$(echo "$set_src" | awk '{ print $3 }')" "$recurse"
+			generate_src "$set_src" "$full_dir" "$recurse"
 		fi
 	done < <(grep -E '^[[:space:]]*set_(src|glob)\(' "$cmakelist")
 }
 
 generate_sources
-generate_data
 
 echo "[*] done"
-
